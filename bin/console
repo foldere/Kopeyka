@@ -1,0 +1,109 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use App\Application\CategoryService;
+use App\Application\CurrencyConverter;
+use App\Application\TransactionService;
+use App\Infrastructure\Http\StreamHttpClient;
+use App\Infrastructure\Persistence\Connection;
+use App\Infrastructure\Persistence\Migrator;
+use App\Infrastructure\Persistence\PdoCategoryRepository;
+use App\Infrastructure\Persistence\PdoTransactionRepository;
+use App\Infrastructure\Persistence\Seeder;
+use App\Infrastructure\Rates\RateProviderFactory;
+use App\Infrastructure\Rates\StaticRateProvider;
+use App\Support\Dates;
+use App\Support\Env;
+use App\Support\SystemClock;
+
+require __DIR__ . '/../vendor/autoload.php';
+
+date_default_timezone_set(Env::get('APP_TZ', 'Asia/Yekaterinburg'));
+
+$command = $argv[1] ?? 'help';
+$arg = $argv[2] ?? null;
+
+/** Команда rates:show не требует базы: проверяет источник курсов напрямую. */
+if ($command === 'rates:show') {
+    $date = $arg !== null ? Dates::parse($arg) : (new SystemClock())->today();
+    if ($date === null) {
+        fwrite(STDERR, "Дата должна быть в формате ГГГГ-ММ-ДД.\n");
+        exit(1);
+    }
+    $kind = Env::get('RATE_PROVIDER', 'static');
+    echo "Источник: {$kind}, дата: {$date->format('Y-m-d')}\n";
+    try {
+        foreach (RateProviderFactory::create($kind, new StreamHttpClient())->ratesOn($date) as $code => $micro) {
+            printf("%s  %s\n", $code, App\Domain\Rate::format($micro));
+        }
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'Ошибка: ' . $e->getMessage() . "\n");
+        exit(1);
+    }
+    exit(0);
+}
+
+$pdo = Connection::fromEnv();
+$migrator = new Migrator($pdo, __DIR__ . '/../database/migrations');
+
+$categoryRepo = new PdoCategoryRepository($pdo);
+$clock = new SystemClock();
+// Для тестовых данных всегда используем статичные курсы: сеть не нужна.
+$seeder = new Seeder(
+    $pdo,
+    new CategoryService($categoryRepo),
+    new TransactionService(new PdoTransactionRepository($pdo), $categoryRepo, new CurrencyConverter(new StaticRateProvider())),
+    $clock,
+);
+
+switch ($command) {
+    case 'migrate':
+        $limit = $arg !== null ? (int) $arg : null;
+        $done = $migrator->run($limit);
+        echo $done === [] ? "Новых миграций нет.\n" : 'Применено: ' . implode(', ', $done) . "\n";
+        break;
+
+    case 'migrate:status':
+        foreach ($migrator->applied() as $v) {
+            echo "[x] {$v}\n";
+        }
+        foreach ($migrator->pending() as $v) {
+            echo "[ ] {$v}\n";
+        }
+        break;
+
+    case 'seed:demo':
+        $n = $seeder->demo();
+        echo $n === 0 ? "Данные уже есть, пропускаю.\n" : "Создано транзакций: {$n}\n";
+        break;
+
+    case 'seed:bulk':
+        $count = (int) ($arg ?? 0);
+        if ($count < 1) {
+            fwrite(STDERR, "Использование: php bin/console seed:bulk 200000\n");
+            exit(1);
+        }
+        echo 'Добавлено строк: ' . $seeder->bulk($count) . "\n";
+        break;
+
+    case 'setup':
+        echo 'Применено: ' . (implode(', ', $migrator->run()) ?: 'ничего нового') . "\n";
+        $n = $seeder->demo();
+        echo $n === 0 ? "Данные уже есть, пропускаю.\n" : "Создано транзакций: {$n}\n";
+        break;
+
+    default:
+        echo <<<TXT
+        Использование: php bin/console <команда>
+
+          setup           миграции + демо-данные (с этого начните)
+          migrate [N]     применить все новые миграции (или только первые N)
+          migrate:status  какие миграции применены
+          seed:demo       небольшой набор тестовых данных
+          seed:bulk N     добавить N случайных транзакций (для опытов с индексами)
+          rates:show [Д]  показать курсы из выбранного источника (дата ГГГГ-ММ-ДД)
+
+        TXT;
+}

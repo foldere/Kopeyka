@@ -1,0 +1,109 @@
+# Копейка
+
+REST API для учёта личных финансов: доходы и расходы в разных валютах, категории, отчёты по месяцам и
+категориям. Суммы в иностранной валюте пересчитываются в рубли по курсу ЦБ РФ на дату операции.
+
+**Стек:** PHP 8.3 · MySQL 8 · Nginx · Docker Compose · PHPUnit. Без фреймворка: роутер, слой доступа
+к данным (PDO) и сборка зависимостей написаны вручную.
+
+## Быстрый старт
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose exec php composer install
+docker compose exec php php bin/console setup     # таблицы + демо-данные
+```
+
+API доступен на http://localhost:8080/api/health. Готовые запросы — в [docs/api.http](docs/api.http).
+
+## API
+
+| Метод | Адрес | Описание |
+|---|---|---|
+| GET | `/api/health` | проверка работы |
+| GET, POST | `/api/categories` | список и создание категорий |
+| GET | `/api/transactions` | список: фильтры `from`, `to`, `category_id`, `type`, пагинация `page`, `per_page` |
+| POST | `/api/transactions` | создать (`201` + заголовок `Location`) |
+| GET, PUT, DELETE | `/api/transactions/{id}` | прочитать, заменить, удалить (`204`) |
+| GET | `/api/reports/monthly` | доходы, расходы и баланс по месяцам (`from`, `to`) |
+| GET | `/api/reports/by-category` | суммы по категориям (`type`, `from`, `to`) |
+| GET | `/api/rates` | курсы валют на дату (`date`) |
+
+Пример:
+
+```bash
+curl -X POST http://localhost:8080/api/transactions \
+  -H 'Content-Type: application/json' \
+  -d '{"category_id":1,"type":"expense","amount":"25.50","currency":"USD","occurred_on":"2026-10-10","note":"подписка"}'
+```
+
+```json
+{"data":{"id":71,"category_id":1,"type":"expense","amount":"25.50","currency":"USD",
+ "rate":"95.000000","amount_rub":"2422.50","occurred_on":"2026-10-10","note":"подписка"}}
+```
+
+Ошибки всегда в одном формате: `{"error": {"code", "message", "details"}}`.
+
+| Код | Когда |
+|---|---|
+| 400 | тело запроса — не JSON-объект |
+| 404 | нет такого ресурса или маршрута |
+| 405 | метод не поддерживается (заголовок `Allow`) |
+| 422 | данные не прошли проверку (в `details` — ошибки по полям) |
+| 502 | источник курсов недоступен |
+
+## Курсы валют
+
+Источник выбирается переменной `RATE_PROVIDER` в `.env`:
+
+| Значение | Откуда курсы |
+|---|---|
+| `static` | фиксированные демо-курсы, интернет не нужен (по умолчанию) |
+| `cbr_xml` | ЦБ РФ, формат XML (`cbr.ru/scripts/XML_daily.asp`) |
+| `cbr_json` | ЦБ РФ, формат JSON (зеркало `cbr-xml-daily.ru`) |
+
+Курсы внешних источников кэшируются в таблице `exchange_rates`. Курс, по которому была пересчитана
+операция, сохраняется вместе с ней, поэтому старые отчёты не меняются. Проверить источник без запуска
+сервера: `docker compose exec php php bin/console rates:show 2026-10-14`.
+
+## Устройство
+
+```
+public/index.php            точка входа
+src/Bootstrap.php           сборка приложения (ручное внедрение зависимостей)
+src/Domain/                 сущности, деньги, курсы, интерфейсы репозиториев
+src/Application/            сценарии: транзакции, категории, отчёты, конвертер валют
+src/Infrastructure/         MySQL (PDO), HTTP-клиент, провайдеры курсов (XML, JSON, кэш)
+src/Http/                   роутер, контроллеры, преобразование ошибок в ответы
+database/migrations/        версионные миграции
+tests/                      PHPUnit
+```
+
+Решения, на которые стоит обратить внимание:
+
+- **Деньги — целые числа** в копейках, курс — целое число «×10⁶». Никакого `float`.
+- **Зависимости направлены внутрь:** домен и сценарии не знают про HTTP и SQL, всё внешнее
+  подключается через интерфейсы (`RateProviderInterface`, репозитории, `Clock`).
+- **Все SQL-запросы с параметрами**, фильтры проверяются до обращения к базе.
+- Ошибки превращаются в HTTP-ответы в одном месте — `ApiKernel`.
+
+## База данных
+
+```bash
+docker compose exec php php bin/console migrate:status   # что применено
+docker compose exec php php bin/console migrate          # применить новые
+docker compose exec php php bin/console seed:bulk 200000 # много случайных строк для замеров
+```
+
+Данные `seed:bulk` случайные (категории и типы операций не согласованы между собой), годятся только
+для проверки скорости запросов.
+
+## Тесты
+
+```bash
+docker compose exec php composer test
+```
+
+Тесты не требуют базы данных и сети: репозитории заменены in-memory реализациями, HTTP — заглушкой,
+а ответы ЦБ лежат в `tests/fixtures` (XML в кодировке windows-1251, как у настоящего сервиса).

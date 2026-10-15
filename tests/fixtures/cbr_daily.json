@@ -1,0 +1,9 @@
+{
+  "Date": "2026-10-14T11:30:00+03:00",
+  "Valute": {
+    "USD": {"ID": "R01235", "CharCode": "USD", "Nominal": 1, "Name": "Доллар США", "Value": 95.1234},
+    "EUR": {"ID": "R01239", "CharCode": "EUR", "Nominal": 1, "Name": "Евро", "Value": 103.5678},
+    "KZT": {"ID": "R01335", "CharCode": "KZT", "Nominal": 100, "Name": "Казахстанских тенге", "Value": 19.0015},
+    "JPY": {"ID": "R01820", "CharCode": "JPY", "Nominal": 100, "Name": "Японских иен", "Value": 61.0}
+  }
+}

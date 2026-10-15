@@ -1,0 +1,64 @@
+# Запросы для VS Code (расширение «REST Client») или JetBrains HTTP Client.
+
+@host = http://localhost:8080
+
+### Проверка
+GET {{host}}/api/health
+
+### Категории
+GET {{host}}/api/categories
+
+###
+POST {{host}}/api/categories
+Content-Type: application/json
+
+{"name": "Подарки"}
+
+### Создать расход в долларах (курс подставится автоматически)
+POST {{host}}/api/transactions
+Content-Type: application/json
+
+{
+  "category_id": 1,
+  "type": "expense",
+  "amount": "25.50",
+  "currency": "USD",
+  "occurred_on": "2026-10-10",
+  "note": "подписка"
+}
+
+### Список с фильтрами и пагинацией
+GET {{host}}/api/transactions?from=2026-10-01&to=2026-10-31&type=expense&page=1&per_page=10
+
+### Одна транзакция
+GET {{host}}/api/transactions/1
+
+### Заменить
+PUT {{host}}/api/transactions/1
+Content-Type: application/json
+
+{
+  "category_id": 1,
+  "type": "expense",
+  "amount": "30",
+  "currency": "EUR",
+  "occurred_on": "2026-10-10"
+}
+
+### Удалить
+DELETE {{host}}/api/transactions/1
+
+### Доходы и расходы по месяцам
+GET {{host}}/api/reports/monthly?from=2026-05-01&to=2026-10-31
+
+### Расходы по категориям
+GET {{host}}/api/reports/by-category?type=expense&from=2026-05-01&to=2026-10-31
+
+### Курсы валют на дату
+GET {{host}}/api/rates?date=2026-10-14
+
+### Ошибка валидации (ответ 422 с подробностями по полям)
+POST {{host}}/api/transactions
+Content-Type: application/json
+
+{"category_id": 999, "type": "x", "amount": "1.234", "currency": "JPY", "occurred_on": "2030-01-01"}
